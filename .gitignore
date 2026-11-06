@@ -1,0 +1,5 @@
+# Keep secrets, collected data and local environments out of git.
+collector.env
+data/
+.venv/
+__pycache__/

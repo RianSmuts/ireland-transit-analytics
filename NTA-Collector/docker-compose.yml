@@ -1,0 +1,19 @@
+# Runs the NTA collector around the clock. Start it with `docker compose up -d --build`
+# from this folder; README.md, section 3, has the full steps.
+services:
+  collector:
+    build: .
+    image: nta-collector
+    container_name: nta-collector   # one collector per pair of keys; a second copy won't start
+    restart: unless-stopped         # back up after a crash or a reboot, unless you stopped it
+    init: true                      # passes `docker stop` on to the collector, so it stops cleanly
+    stop_grace_period: 60s          # time to finish the round in progress (up to about 40s)
+    user: "1000:1000"               # your `id -u`:`id -g` on the server, so data/ files are yours
+    env_file: collector.env         # API keys and the healthchecks.io ping URL
+    volumes:
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"             # keep the log from growing forever
+        max-file: "3"

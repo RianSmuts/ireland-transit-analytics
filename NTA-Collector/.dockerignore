@@ -1,0 +1,5 @@
+# Only collector.py and requirements.txt go into the image. Leaving everything else out
+# keeps your keys out of it and stops Docker sending the whole data folder on every build.
+*
+!collector.py
+!requirements.txt
