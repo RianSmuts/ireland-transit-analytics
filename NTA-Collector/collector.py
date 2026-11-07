@@ -16,7 +16,10 @@ version as the zip the NTA published, recorded in versions.csv. The NTA regenera
 trip_ids whenever it uploads new schedules, so live data only matches the version that was
 in use when it was collected. Unpacking the right version is the builder's job too.
 
-It runs in Docker: docker-compose.yml starts it, with no arguments (see README.md).
+It runs in Docker, with no arguments. GitHub Actions publishes an image for each release
+(ghcr.io/<owner>/nta-collector), which the server runs; docker-compose.yml builds and runs
+it locally for testing (see README.md). The log's first line gives the release the image
+was built from, or "dev" for a local build.
 
 Configuration (environment variables, set in collector.env)
 -----------------------------------------------------------
@@ -105,7 +108,8 @@ ENDPOINTS = {  # the two feeds, fetched together every round
 STATIC_URL = os.environ.get("NTA_STATIC_URL") or "https://www.transportforireland.ie/transitData/Data/GTFS_Realtime.zip"
 HEALTHCHECK_URL = os.environ.get("NTA_HEALTHCHECK_URL", "").strip()
 KEY_HEADER = "x-api-key"         # the header the NTA's API reads the key from
-USER_AGENT = "nta-gtfsr-collector/3.1 (personal research project)"
+VERSION = os.environ.get("NTA_COLLECTOR_VERSION") or "dev"   # the release, set by the image build
+USER_AGENT = f"nta-gtfsr-collector/{VERSION} (personal research project)"
 DATA_DIR = Path("/data")         # the container's data folder, mounted from the server
 
 ROUND_SECONDS = 60               # a round every minute, on the minute: each key's fair-use limit
@@ -596,6 +600,7 @@ def main() -> None:
     logging.Formatter.converter = time.gmtime  # log times in UTC, like the data
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         datefmt="%Y-%m-%d %H:%M:%S UTC")
+    log.info("Starting NTA collector %s.", VERSION)
     fetcher = Fetcher(load_keys())
     signal.signal(signal.SIGTERM, _on_sigterm)  # `docker stop` (see "stopping cleanly")
     try:

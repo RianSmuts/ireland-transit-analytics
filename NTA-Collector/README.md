@@ -2,8 +2,9 @@
 
 Fetches the NTA's two GTFS-Realtime feeds, vehicle positions and trip updates, at the start of
 every minute, and keeps every response exactly as received, along with every version of the
-static timetable. It runs in Docker on a Linux server. Turning the responses into tables is a
-separate job, the builder (see section 5).
+static timetable. It runs in Docker: you test changes on your PC, GitHub publishes an image for
+each release, and the server runs that image. Turning the responses into tables is a separate
+job, the builder (see section 7).
 
 ## 1. Get the API keys
 1. Sign up at https://developer.nationaltransport.ie and subscribe to the **GTFS-Realtime** product.
@@ -24,78 +25,116 @@ check's settings on healthchecks.io:
 - Before you stop the collector on purpose, **pause** the check, or you'll get an alert. The
   next check-in un-pauses it.
 
-## 3. Run it on the server
-
-### Before you start
-- The server needs Docker with the Compose plugin (`docker compose version` should work), and
-  your account needs permission to use it (membership of the `docker` group).
-- **Stop the collector on your PC first.** Only one collector should use your keys at a time.
-- Make sure there's room: compare how much a day of `data/raw` takes on your PC with the free
-  space `df -h ~` shows on the server.
-- The file names are the fetch times, taken from the server's clock, so the clock must be right:
-  `timedatectl` should say `System clock synchronized: yes`.
-
-### Step 1: fill in your keys
-On your PC, open `collector.env` in Notepad and paste in your two keys. Your healthchecks.io
-ping URL is already in it. The file holds secrets, so keep it out of anything you publish.
-
-### Step 2: copy the files over
-In PowerShell (replace `you@server` with your login and the server's address):
+## 3. Test it on your PC
+Try a change with Docker Desktop before you release it. Put your keys in `collector.env` first.
+It's git-ignored, so it stays on your PC. Then, in PowerShell:
 ```
-cd $HOME\Documents\ProjectTransport\NTA-Collector
-ssh you@server "mkdir -p nta-collector/data"
-scp collector.py requirements.txt Dockerfile docker-compose.yml .dockerignore collector.env you@server:nta-collector/
-```
-Creating `data` yourself matters: if Docker creates it, it belongs to root and the collector
-can't write to it. To carry on with the data you've already collected, copy that too:
-`scp -r data you@server:nta-collector/`. Earlier versions also wrote `data/static/current/` and
-`data/static/state.json`, which this one doesn't use, so you can delete those on the server:
-`rm -r ~/nta-collector/data/static/current ~/nta-collector/data/static/state.json`
-
-### Step 3: check your user ID
-Everything from here on runs on the server, so `ssh you@server` first:
-```
-cd ~/nta-collector
-chmod 600 collector.env
-id -u
-id -g
-```
-If either number isn't `1000`, put yours in the `user:` line of `docker-compose.yml` (for
-example `"1001:1001"`), so the files the collector writes belong to you.
-
-### Step 4: start it
-```
+cd $HOME\Documents\ProjectTransport\ireland-transit-analytics\NTA-Collector
 docker compose up -d --build
 docker compose logs -f
 ```
-The collector waits for the start of the next minute. From then on, every minute you should
-see a `vehicles` line and a `trip_updates` line with entity counts, and the check turns green on
-healthchecks.io. Ctrl+C only closes the log; the collector keeps going. It starts again by itself
-after a crash or a reboot. If it stops straight away, the log says why (a key missing from
-`collector.env`, for example).
+The log starts with `Starting NTA collector dev` (a local build has no release number), then
+shows a `vehicles` line and a `trip_updates` line every minute. Ctrl+C closes the log and leaves
+the collector running. The data goes into the `data` folder here, which is git-ignored too.
+When you're done, run `docker compose down`.
 
-### Day to day
-Run these from `~/nta-collector`:
+Once the server is collecting:
+- Before a test, empty the ping URL in your PC's `collector.env` (`NTA_HEALTHCHECK_URL=`).
+  Otherwise a test that works would hide a server that doesn't, and a test that fails would
+  send an alert.
+- Your PC and the server use the same keys, and both call on the minute, so one of them is
+  refused each time and the server's data has gaps while a test runs. Keep tests short, or test
+  with a second pair of keys if the NTA's portal lets you add another subscription.
 
-| To... | Run |
-|---|---|
-| Follow the log | `docker compose logs -f` |
-| Check it's running | `docker compose ps` |
-| Update it after changing `collector.py` | `docker compose up -d --build` |
-| Apply a change to `collector.env` | `docker compose up -d` |
-| Stop it (pause the check first) | `docker compose stop` |
-| Start it again | `docker compose start` |
+## 4. Publish a release
+GitHub Actions builds the image and publishes it to GitHub's container registry as
+`ghcr.io/riansmuts/nta-collector`, for both x86 and ARM servers, each time you create a release
+tag like `nta-collector-v0.1.1`. The workflow is `.github/workflows/publish-nta-collector.yml`,
+at the top of the repo. The tag starts with the part of the repo it releases, so other parts
+(the builder, say) can have releases of their own later.
 
-A stop or an update lets the round in progress finish saving first, so no file is left
-half-written. Once you've stopped it, it stays stopped, reboots included, until you start it.
+### Each release
+1. Test the change on your PC (section 3), then commit and push it.
+2. On the repo's GitHub page, click **Releases**, then **Draft a new release**.
+3. Under **Choose a tag**, type the new tag, like `nta-collector-v0.1.2`, and pick **Create new
+   tag on publish**. Leave the target as `main`.
+4. Click **Generate release notes**, add a line on what changed, and click **Publish release**.
+5. The **Actions** tab shows the build. When it's green, after a few minutes, the new version is
+   published, and your friend's Renovate opens a pull request to update the server.
 
-### Getting the data to your PC
-Your PC needs a copy of `data/` for the builder, DuckDB and Power BI. WinSCP's *Synchronize*,
-set to update your local folder, copies only new and changed files; with WSL, run
-`rsync -av you@server:nta-collector/data/ data/` from the collector folder. That copy is also
+A tag pushed from GitHub Desktop starts the build too, but without release notes. Never change
+or reuse a published version: release a new one instead.
+
+### The first time
+Release `nta-collector-v0.1.1` as above. Once the build is green:
+1. Make the package public, so the server and Renovate can pull it without a password. On
+   GitHub, open your profile, then **Packages** → **nta-collector** → **Package settings**.
+   Under **Danger Zone**, click **Change visibility**, pick **Public** and confirm. It can't be
+   made private again, but the image only holds `collector.py` and its Python packages, never
+   your keys.
+2. Give your friend the image name, `ghcr.io/riansmuts/nta-collector:0.1.1`, and section 5.
+
+### Version numbers
+- **Patch** (0.1.1 → 0.1.2): fixes. Nothing changes for the server or the builder.
+- **Minor** (0.1.2 → 0.2.0): new features. Still nothing to change on the server, and the files
+  the builder reads keep their layout.
+- **Major** (0.2.0 → 1.0.0): something has to change elsewhere too, like a new required setting
+  in `collector.env` or a new layout for the files the builder reads. Say what in the release
+  notes. Renovate raises major versions as separate pull requests, so your friend can make the
+  change before updating. Renovate only counts a change in the first number as major, even
+  while it's 0, so the first change like this takes you to 1.0.0, not 0.3.0.
+
+## 5. Run it on the server
+The server runs the published image, so it needs no copy of the code: just a compose file,
+`collector.env` and a folder for the data. Your friend's setup will have its own way of laying
+these out. What matters is in this compose file:
+```yaml
+services:
+  nta-collector:
+    image: ghcr.io/riansmuts/nta-collector:0.1.1  # a full version, so Renovate can update it
+    container_name: nta-collector  # one collector per pair of keys; a second copy won't start
+    restart: unless-stopped        # back up after a crash or a reboot
+    init: true                     # passes `docker stop` on to the collector
+    stop_grace_period: 60s         # time to finish the round in progress (up to about 40s)
+    user: "1000:1000"              # must own the data folder
+    env_file: collector.env        # your keys and the healthchecks.io ping URL
+    volumes:
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"            # keep the log from growing forever
+        max-file: "3"
+```
+
+Before the first start:
+- **Stop the collector on your PC** (`docker compose down`). Only one collector can use your
+  keys at a time.
+- **`collector.env`** holds your keys and ping URL. It's a secret, so keep it out of git on the
+  server's side too.
+- **The data folder** must exist before the first start, owned by the `user:` in the compose
+  file. If Docker creates it, it belongs to root and the collector can't write to it. To carry
+  on with the data you've collected so far, copy it in. Earlier versions also wrote
+  `data/static/current/` and `data/static/state.json`, which this one doesn't use, so you can
+  leave those out.
+- **The clock**: file names are fetch times from the server's clock, so it must be
+  synchronised. `timedatectl` should say `System clock synchronized: yes`.
+- **Disk space**: compare a day of `data/raw` on your PC with the space the server can spare.
+
+Once it's running, `docker logs -f nta-collector` shows a `vehicles` line and a `trip_updates`
+line every minute, and the check turns green on healthchecks.io. If it stops straight away, the
+log says why (a key missing from `collector.env`, for example).
+
+**Updates:** merging a Renovate pull request updates the server. The old container finishes the
+round in progress and stops, and the new one starts at the next minute, so an update costs at
+most one round. To go back, put the previous version back in the compose file.
+
+**Getting the data to your PC:** your PC needs a copy of `data/` for the builder, DuckDB and
+Power BI. WinSCP's *Synchronize*, set to update your local folder, copies only new and changed
+files; with WSL, `rsync -av you@server:<data folder>/ data/` does the same. That copy is also
 your backup if the server ever fails.
 
-## 4. How it behaves
+## 6. How it behaves
 
 ### Schedule
 Both feeds are requested at the same moment at the start of every minute (UTC), so the snapshots
@@ -129,14 +168,14 @@ nothing has changed, the server just answers "not modified" and nothing is downl
 version is kept because the NTA regenerates `trip_id`s whenever it uploads new schedules, so
 live data only matches the version that was in use when it was collected.
 
-## 5. Notes for the builder
+## 7. Notes for the builder
 The builder turns `data/raw` into tables. What it can rely on:
 - Every response is in `data/raw/<endpoint>/<YYYY-MM-DD>/<HHMMSS>.pb.gz`: gzipped GTFS-RT
   protobuf, exactly as received. The folder date and file name are the fetch time in UTC.
   A `vehicles` file and a `trip_updates` file with the same date and name were fetched
   together, so they're one snapshot of the network.
-- From collector 3.0, rounds start on the minute, so file names normally end in `00`. Files from
-  earlier versions can have any seconds.
+- Rounds start on the minute, so file names normally end in `00`. Files from early development
+  versions of the collector can have any seconds.
 - Responses that failed the health check are saved too, so skip any file that doesn't decode.
 - Decode with `gtfs_realtime_pb2.FeedMessage` from the same `gtfs-realtime-bindings` package.
 
@@ -158,18 +197,21 @@ The plan for it:
 - The timetables stay zipped; read the files you need straight out of the zip (Python's
   `zipfile` does this) rather than unpacking every version.
 
-`data/parsed/` holds the CSVs that collector 1.x wrote; later versions don't add to it. The
-builder can replace them by rebuilding those days from `data/raw`. `explore.sql` queries those
-CSVs, so it needs pointing at the builder's tables once they exist.
+`data/parsed/` holds the CSVs that early development versions of the collector wrote; later
+versions don't add to it. The
+builder can replace them by rebuilding those days from `data/raw`. Queries written for those
+CSVs (like `explore.sql`) need pointing at the builder's tables once they exist.
 
 ## Files
 - `collector.py`: the collector.
-- `Dockerfile`, `docker-compose.yml`, `.dockerignore`: the container. Only `collector.py` and
-  `requirements.txt` go into the image.
-- `collector.env`: your keys and healthchecks.io ping URL. Private.
+- `Dockerfile`, `.dockerignore`: the image. Only `collector.py` and `requirements.txt` go into it.
+- `docker-compose.yml`: builds and runs the collector on your PC, for testing.
 - `requirements.txt`: the Python packages.
-- `.gitignore`: keeps `collector.env` and `data/` out of git.
-- `explore.sql`: DuckDB queries for collector 1.x's CSVs.
-- `data/raw/`, `data/static/`: what the collector writes (see section 5 and the top of `collector.py`).
+- `collector.env`: your keys and healthchecks.io ping URL. Private: the repo's `.gitignore`
+  keeps it out of git.
+- `data/raw/`, `data/static/`: what the collector writes (see section 7 and the top of
+  `collector.py`). Also kept out of git.
+- `.github/workflows/publish-nta-collector.yml`, at the top of the repo: publishes the image for
+  each release (section 4).
 
 Data: National Transport Authority, GTFS-R, CC BY 4.0. Credit the NTA wherever you publish results.

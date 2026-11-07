@@ -1,5 +1,5 @@
-# Runs the NTA collector around the clock. Start it with `docker compose up -d --build`
-# from this folder; README.md, section 3, has the full steps.
+# Builds and runs the NTA collector on your PC, for testing a change before you release it
+# (README.md, section 3). The server runs the published image instead (section 5).
 services:
   collector:
     build: .
@@ -8,7 +8,7 @@ services:
     restart: unless-stopped         # back up after a crash or a reboot, unless you stopped it
     init: true                      # passes `docker stop` on to the collector, so it stops cleanly
     stop_grace_period: 60s          # time to finish the round in progress (up to about 40s)
-    user: "1000:1000"               # your `id -u`:`id -g` on the server, so data/ files are yours
+    user: "1000:1000"               # who owns the files written to data/
     env_file: collector.env         # API keys and the healthchecks.io ping URL
     volumes:
       - ./data:/data
